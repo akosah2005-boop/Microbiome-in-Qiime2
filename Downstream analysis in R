@@ -1,0 +1,253 @@
+###############################################################################
+# MICROBIOME DOWNSTREAM ANALYSIS PIPELINE IN R USING PHYLOSEQ
+# Author: Yaw Akosah
+# Description:
+# Comprehensive downstream microbiome analysis workflow using phyloseq
+###############################################################################
+
+#############################
+# 1. LOAD LIBRARIES
+#############################
+
+library(phyloseq)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(vegan)
+library(DESeq2)
+library(microbiome)
+library(pheatmap)
+library(ape)
+library(RColorBrewer)
+
+#############################
+# 2. IMPORT DATA
+#############################
+
+# Import OTU/ASV table
+otu_table_data <- read.csv("feature-table.csv",
+                           row.names = 1,
+                           check.names = FALSE)
+
+# Import taxonomy table
+taxonomy_data <- read.csv("taxonomy.csv",
+                          row.names = 1)
+
+# Import metadata
+metadata <- read.table("metadata.tsv",
+                       header = TRUE,
+                       row.names = 1,
+                       sep = "\t")
+
+#############################
+# 3. CREATE PHYLOSEQ OBJECT
+#############################
+
+# Convert to matrices
+otu_mat <- as.matrix(otu_table_data)
+tax_mat <- as.matrix(taxonomy_data)
+
+# Create phyloseq components
+OTU <- otu_table(otu_mat, taxa_are_rows = TRUE)
+TAX <- tax_table(tax_mat)
+SAM <- sample_data(metadata)
+
+# Create phyloseq object
+physeq <- phyloseq(OTU, TAX, SAM)
+
+# View summary
+physeq
+
+#############################
+# 4. FILTER LOW ABUNDANCE TAXA
+#############################
+
+# Remove taxa with very low counts
+physeq_filtered <- filter_taxa(
+  physeq,
+  function(x) sum(x > 5) > (0.05 * length(x)),
+  TRUE
+)
+
+#############################
+# 5. NORMALIZATION
+#############################
+
+# Relative abundance transformation
+physeq_rel <- transform_sample_counts(
+  physeq_filtered,
+  function(x) x / sum(x)
+)
+
+#############################
+# 6. ALPHA DIVERSITY ANALYSIS
+#############################
+
+# Calculate alpha diversity metrics
+alpha_div <- estimate_richness(
+  physeq_filtered,
+  measures = c("Shannon", "Simpson", "Observed")
+)
+
+# Add metadata
+alpha_div$Treatment <- sample_data(physeq_filtered)$Treatment
+
+# Plot Shannon diversity
+ggplot(alpha_div,
+       aes(x = Treatment,
+           y = Shannon,
+           fill = Treatment)) +
+  geom_boxplot() +
+  geom_jitter(width = 0.2) +
+  theme_bw() +
+  labs(title = "Shannon Diversity")
+
+#############################
+# 7. BETA DIVERSITY ANALYSIS
+#############################
+
+# Bray-Curtis distance
+bray_dist <- distance(
+  physeq_rel,
+  method = "bray"
+)
+
+# PCoA ordination
+ordination <- ordinate(
+  physeq_rel,
+  method = "PCoA",
+  distance = bray_dist
+)
+
+# Plot PCoA
+plot_ordination(
+  physeq_rel,
+  ordination,
+  color = "Treatment"
+) +
+  geom_point(size = 4) +
+  theme_bw() +
+  ggtitle("PCoA - Bray Curtis")
+
+#############################
+# 8. PERMANOVA
+#############################
+
+metadata_df <- data.frame(sample_data(physeq_rel))
+
+adonis_result <- adonis2(
+  bray_dist ~ Treatment,
+  data = metadata_df
+)
+
+print(adonis_result)
+
+#############################
+# 9. TAXONOMIC BAR PLOTS
+#############################
+
+# Agglomerate at Phylum level
+physeq_phylum <- tax_glom(
+  physeq_rel,
+  taxrank = "Phylum"
+)
+
+# Plot abundance
+plot_bar(
+  physeq_phylum,
+  fill = "Phylum"
+) +
+  facet_wrap(~Treatment) +
+  theme_bw()
+
+#############################
+# 10. HEATMAP
+#############################
+
+# Select top abundant taxa
+top_taxa <- names(sort(
+  taxa_sums(physeq_rel),
+  decreasing = TRUE
+))[1:25]
+
+physeq_top <- prune_taxa(top_taxa, physeq_rel)
+
+# Heatmap
+plot_heatmap(
+  physeq_top,
+  method = "NMDS",
+  distance = "bray",
+  sample.label = "Treatment"
+)
+
+#############################
+# 11. DIFFERENTIAL ABUNDANCE (DESEQ2)
+#############################
+
+# Convert phyloseq to DESeq2 object
+dds <- phyloseq_to_deseq2(
+  physeq_filtered,
+  ~ Treatment
+)
+
+# Run DESeq2
+dds <- DESeq(dds)
+
+# Extract results
+res <- results(dds)
+
+# Order by adjusted p-value
+res_ordered <- res[order(res$padj, na.last = NA), ]
+
+# View significant taxa
+sig_taxa <- subset(res_ordered, padj < 0.05)
+
+print(head(sig_taxa))
+
+#############################
+# 12. VOLCANO PLOT
+#############################
+
+res_df <- as.data.frame(res_ordered)
+
+ggplot(res_df,
+       aes(x = log2FoldChange,
+           y = -log10(padj))) +
+  geom_point() +
+  theme_bw() +
+  labs(title = "Differential Abundance Volcano Plot")
+
+#############################
+# 13. CORE MICROBIOME ANALYSIS
+#############################
+
+core_taxa <- core(
+  physeq_rel,
+  detection = 0.001,
+  prevalence = 0.5
+)
+
+print(core_taxa)
+
+#############################
+# 14. EXPORT RESULTS
+#############################
+
+# Export alpha diversity
+write.csv(alpha_div,
+          "alpha_diversity_results.csv")
+
+# Export DESeq2 results
+write.csv(as.data.frame(res_ordered),
+          "deseq2_results.csv")
+
+#############################
+# 15. SAVE PHYLOSEQ OBJECT
+#############################
+
+saveRDS(physeq,
+        file = "phyloseq_object.rds")
+
+###############################################################################
+# END OF PIPELINE
+###############################################################################

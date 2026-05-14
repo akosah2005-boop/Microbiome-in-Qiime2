@@ -1,0 +1,73 @@
+#!/bin/bash
+
+###############################################################################
+# QIIME2 Microbiome Analysis Pipeline
+# Author: Yaw Akosah
+###############################################################################
+
+source activate qiime2-2024.2
+
+# STEP 1: IMPORT DATA
+qiime tools import \
+  --type 'SampleData[PairedEndSequencesWithQuality]' \
+  --input-path manifest.csv \
+  --output-path paired-end-demux.qza \
+  --input-format PairedEndFastqManifestPhred33V2
+
+# STEP 2: QUALITY SUMMARY
+qiime demux summarize \
+  --i-data paired-end-demux.qza \
+  --o-visualization demux-summary.qzv
+
+# STEP 3: DADA2 DENOISING
+qiime dada2 denoise-paired \
+  --i-demultiplexed-seqs paired-end-demux.qza \
+  --p-trim-left-f 20 \
+  --p-trim-left-r 20 \
+  --p-trunc-len-f 240 \
+  --p-trunc-len-r 220 \
+  --o-table table.qza \
+  --o-representative-sequences rep-seqs.qza \
+  --o-denoising-stats denoising-stats.qza
+
+# STEP 4: FEATURE TABLE SUMMARY
+qiime feature-table summarize \
+  --i-table table.qza \
+  --o-visualization table-summary.qzv \
+  --m-sample-metadata-file metadata.tsv
+
+# STEP 5: TABULATE SEQUENCES
+qiime feature-table tabulate-seqs \
+  --i-data rep-seqs.qza \
+  --o-visualization rep-seqs.qzv
+
+# STEP 6: TAXONOMIC CLASSIFICATION
+qiime feature-classifier classify-sklearn \
+  --i-classifier silva-138-99-nb-classifier.qza \
+  --i-reads rep-seqs.qza \
+  --o-classification taxonomy.qza
+
+# STEP 7: TAXA BARPLOT
+qiime taxa barplot \
+  --i-table table.qza \
+  --i-taxonomy taxonomy.qza \
+  --m-metadata-file metadata.tsv \
+  --o-visualization taxa-bar-plots.qzv
+
+# STEP 8: PHYLOGENETIC TREE
+qiime phylogeny align-to-tree-mafft-fasttree \
+  --i-sequences rep-seqs.qza \
+  --o-alignment aligned-rep-seqs.qza \
+  --o-masked-alignment masked-aligned-rep-seqs.qza \
+  --o-tree unrooted-tree.qza \
+  --o-rooted-tree rooted-tree.qza
+
+# STEP 9: CORE DIVERSITY
+qiime diversity core-metrics-phylogenetic \
+  --i-phylogeny rooted-tree.qza \
+  --i-table table.qza \
+  --p-sampling-depth 10000 \
+  --m-metadata-file metadata.tsv \
+  --output-dir core-metrics-results
+
+echo "Pipeline completed successfully!"

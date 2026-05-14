@@ -1,0 +1,3 @@
+#SampleID	Treatment
+Sample1	Control
+Sample2	Disease
